@@ -27,15 +27,15 @@ Schema notes (discovered by inspecting jsonl):
 Skill calls: tool_use name == "Skill", input.skill carries the skill id.
 Agent calls: tool_use name == "Task"  / "Agent", input.subagent_type carries the type.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -59,6 +59,9 @@ TEMPLATE_PATH = Path(__file__).parent / "index.html.template"
 #   ($1.74/$3.48 input/output) so totals don't drop after the promo ends.
 #   Cache hit price = 0.10 * input per DeepSeek's 2026-04-26 adjustment.
 PRICING_DATE = "2026-05-13"
+# Keep PRICING table aligned for at-a-glance price comparison; black expanding
+# each dict to 6 lines hurts readability. fmt directives must be on their own line.
+# fmt: off
 PRICING_USD_PER_MTOK = {
     # --- Anthropic ---
     "claude-opus-4-7":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
@@ -72,6 +75,7 @@ PRICING_USD_PER_MTOK = {
     # --- DeepSeek (V4 Pro list price; ignore active promo so cost stays stable) ---
     "deepseek-v4-pro":          {"input": 1.74, "output":  3.48, "cache_create": 1.74, "cache_read": 0.174},
 }
+# fmt: on
 
 # Window: inclusive both ends, in local time (CST = UTC+8).
 LOCAL_TZ = timezone(timedelta(hours=8))
@@ -107,12 +111,23 @@ def iter_records():
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", required=True, type=Path,
-                    help="Output directory (created if missing); receives data.json + index.html")
-    ap.add_argument("--end", default=None,
-                    help="End date YYYY-MM-DD (inclusive). Default: today (local).")
-    ap.add_argument("--days", type=int, default=30,
-                    help="Window length in days (default 30). Window is [end-days+1, end].")
+    ap.add_argument(
+        "--out",
+        required=True,
+        type=Path,
+        help="Output directory (created if missing); receives data.json + index.html",
+    )
+    ap.add_argument(
+        "--end",
+        default=None,
+        help="End date YYYY-MM-DD (inclusive). Default: today (local).",
+    )
+    ap.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Window length in days (default 30). Window is [end-days+1, end].",
+    )
     args = ap.parse_args()
 
     if args.end:
@@ -128,7 +143,7 @@ def main() -> None:
     HTML_OUT = out_dir / "index.html"
 
     # Daily counters
-    day_user = Counter()         # user msg / day
+    day_user = Counter()  # user msg / day
     day_assistant_msgs = Counter()  # unique assistant message.id / day
     day_sessions = defaultdict(set)  # date -> set(sessionId)
 
@@ -136,8 +151,12 @@ def main() -> None:
     heatmap = Counter()  # (weekday, hour) -> assistant_msgs
 
     # Tokens
-    day_tokens = defaultdict(lambda: Counter())  # date -> Counter(input/output/cache_read/cache_create)
-    model_tokens = defaultdict(lambda: Counter())  # model -> Counter(input/output/cache_read/cache_create)
+    day_tokens = defaultdict(
+        lambda: Counter()
+    )  # date -> Counter(input/output/cache_read/cache_create)
+    model_tokens = defaultdict(
+        lambda: Counter()
+    )  # model -> Counter(input/output/cache_read/cache_create)
 
     # Tools / skills / agents
     tools = Counter()
@@ -226,18 +245,20 @@ def main() -> None:
     daily_series = []
     for ds in days:
         toks = day_tokens.get(ds, Counter())
-        daily_series.append({
-            "date": ds,
-            "user_msgs": day_user.get(ds, 0),
-            "assistant_msgs": day_assistant_msgs.get(ds, 0),
-            "sessions": len(day_sessions.get(ds, ())),
-            "tokens": {
-                "input": toks.get("input", 0),
-                "output": toks.get("output", 0),
-                "cache_create": toks.get("cache_create", 0),
-                "cache_read": toks.get("cache_read", 0),
-            },
-        })
+        daily_series.append(
+            {
+                "date": ds,
+                "user_msgs": day_user.get(ds, 0),
+                "assistant_msgs": day_assistant_msgs.get(ds, 0),
+                "sessions": len(day_sessions.get(ds, ())),
+                "tokens": {
+                    "input": toks.get("input", 0),
+                    "output": toks.get("output", 0),
+                    "cache_create": toks.get("cache_create", 0),
+                    "cache_read": toks.get("cache_read", 0),
+                },
+            }
+        )
 
     # Heatmap matrix [7 weekdays][24 hours]
     heatmap_matrix = [[heatmap.get((w, h), 0) for h in range(24)] for w in range(7)]
@@ -249,24 +270,29 @@ def main() -> None:
         cost = None
         if p:
             cost = {
-                "input":        c.get("input", 0)        / 1e6 * p["input"],
-                "output":       c.get("output", 0)       / 1e6 * p["output"],
+                "input": c.get("input", 0) / 1e6 * p["input"],
+                "output": c.get("output", 0) / 1e6 * p["output"],
                 "cache_create": c.get("cache_create", 0) / 1e6 * p["cache_create"],
-                "cache_read":   c.get("cache_read", 0)   / 1e6 * p["cache_read"],
+                "cache_read": c.get("cache_read", 0) / 1e6 * p["cache_read"],
             }
             cost["total"] = sum(cost.values())
-        model_summary.append({
-            "model": model,
-            "messages": c.get("messages", 0),
-            "input": c.get("input", 0),
-            "output": c.get("output", 0),
-            "cache_create": c.get("cache_create", 0),
-            "cache_read": c.get("cache_read", 0),
-            "total": c.get("input", 0) + c.get("output", 0) + c.get("cache_create", 0) + c.get("cache_read", 0),
-            "price_per_mtok": p,            # null if unknown model
-            "cost_usd": cost,                # null if unpriced
-            "priced": p is not None,
-        })
+        model_summary.append(
+            {
+                "model": model,
+                "messages": c.get("messages", 0),
+                "input": c.get("input", 0),
+                "output": c.get("output", 0),
+                "cache_create": c.get("cache_create", 0),
+                "cache_read": c.get("cache_read", 0),
+                "total": c.get("input", 0)
+                + c.get("output", 0)
+                + c.get("cache_create", 0)
+                + c.get("cache_read", 0),
+                "price_per_mtok": p,  # null if unknown model
+                "cost_usd": cost,  # null if unpriced
+                "priced": p is not None,
+            }
+        )
 
     # Totals
     totals = {
@@ -288,7 +314,13 @@ def main() -> None:
     totals["cache_hit_rate"] = (totals["cache_read"] / cache_in) if cache_in else 0.0
 
     # Aggregate cost over all priced models
-    cost_total = {"input": 0.0, "output": 0.0, "cache_create": 0.0, "cache_read": 0.0, "total": 0.0}
+    cost_total = {
+        "input": 0.0,
+        "output": 0.0,
+        "cache_create": 0.0,
+        "cache_read": 0.0,
+        "total": 0.0,
+    }
     cost_unpriced_tokens = 0
     for m in model_summary:
         if m["cost_usd"]:
@@ -343,14 +375,22 @@ def main() -> None:
     print(f"  window: {START_DATE.date()} → {END_DATE.date()}")
     print(f"  records scanned: {total_records:,}  in window: {in_window_records:,}")
     print(f"  active days: {totals['active_days']}/{len(days)}")
-    print(f"  assistant msgs: {totals['assistant_msgs']:,}  sessions: {totals['sessions']}")
-    print(f"  tokens (B): in={totals['input']/1e9:.2f} out={totals['output']/1e9:.2f} "
-          f"cc={totals['cache_create']/1e9:.2f} cr={totals['cache_read']/1e9:.2f}")
+    print(
+        f"  assistant msgs: {totals['assistant_msgs']:,}  sessions: {totals['sessions']}"
+    )
+    print(
+        f"  tokens (B): in={totals['input']/1e9:.2f} out={totals['output']/1e9:.2f} "
+        f"cc={totals['cache_create']/1e9:.2f} cr={totals['cache_read']/1e9:.2f}"
+    )
     print(f"  cache hit rate: {totals['cache_hit_rate']*100:.1f}%")
-    print(f"  tools: {totals['tool_calls']:,}  skills: {totals['skill_calls']:,}  agents: {totals['agent_calls']:,}")
-    print(f"  cost (USD): ${cost_total['total']:,.2f}  "
-          f"(in=${cost_total['input']:.2f} out=${cost_total['output']:.2f} "
-          f"cc=${cost_total['cache_create']:.2f} cr=${cost_total['cache_read']:.2f})")
+    print(
+        f"  tools: {totals['tool_calls']:,}  skills: {totals['skill_calls']:,}  agents: {totals['agent_calls']:,}"
+    )
+    print(
+        f"  cost (USD): ${cost_total['total']:,.2f}  "
+        f"(in=${cost_total['input']:.2f} out=${cost_total['output']:.2f} "
+        f"cc=${cost_total['cache_create']:.2f} cr=${cost_total['cache_read']:.2f})"
+    )
     print(f"  pricing date: {PRICING_DATE}")
 
 
