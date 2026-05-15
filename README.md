@@ -7,6 +7,7 @@ My personal collection of [Claude Code Skills](https://docs.claude.com/en/docs/c
 | Skill | Description |
 |---|---|
 | [cc-usage-stats](./skills/cc-usage-stats) | Self-contained HTML dashboard for Claude Code token usage, USD cost, and tool/skill/subagent attribution |
+| [web-access-headless](./skills/web-access-headless) | Fork of [eze-is/web-access](https://github.com/eze-is/web-access): runs a separate headless Chrome (port 9333, isolated profile) instead of reusing the user's daily Chrome — zero impact on the main browser |
 
 ## Install
 
