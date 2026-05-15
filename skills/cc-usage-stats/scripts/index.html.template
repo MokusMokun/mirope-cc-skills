@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Claude Code 使用统计</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --panel-2: #1a1f2c;
+    --border: #232a39;
+    --fg: #e6e8ee;
+    --fg-dim: #9aa3b2;
+    --accent: #c98a4b;       /* warm orange — matches CC terminal vibe */
+    --accent-2: #6a8caf;
+    --good: #7fc8a9;
+    --warn: #d6a45e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+                 "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 32px 24px 56px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
+  h1 .accent { color: var(--accent); }
+  header .meta { color: var(--fg-dim); font-size: 13px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--fg);
+       text-transform: uppercase; letter-spacing: 0.8px; }
+  h2 .sub { color: var(--fg-dim); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  section { margin-bottom: 28px; }
+  .grid { display: grid; gap: 16px; }
+  .grid.kpi { grid-template-columns: repeat(6, 1fr); }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .kpi .panel { padding: 14px 14px; }
+  .kpi .label { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+  .kpi .value { font-size: 22px; font-weight: 600; color: var(--fg); line-height: 1.1; }
+  .kpi .value .unit { color: var(--fg-dim); font-size: 12px; font-weight: 400; margin-left: 4px; }
+  .kpi .hint  { font-size: 11px; color: var(--fg-dim); margin-top: 4px; }
+  .chart { width: 100%; }
+  .h-220 { height: 220px; }
+  .h-280 { height: 280px; }
+  .h-320 { height: 320px; }
+  .h-360 { height: 360px; }
+  .h-460 { height: 460px; }
+  .h-580 { height: 580px; }
+  /* Token section: hero chart + companion */
+  .token-grid { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr); gap: 16px; }
+  /* Model panel split: pie on left, custom HTML legend on right */
+  .model-split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; align-items: center; }
+  #model-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; }
+  #model-legend .row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: baseline; }
+  #model-legend .swatch { width: 10px; height: 10px; border-radius: 2px; align-self: center; }
+  #model-legend .name { color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #model-legend .pct { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  /* Cost table */
+  table.cost { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: auto; }
+  table.cost th, table.cost td { padding: 8px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.cost th { color: var(--fg-dim); font-weight: 500; letter-spacing: 0.3px; font-size: 11px; }
+  table.cost td:first-child, table.cost th:first-child { text-align: left; padding-left: 0; }
+  table.cost td:last-child, table.cost th:last-child { padding-right: 0; }
+  table.cost tr.total td { border-top: 1px solid var(--border); border-bottom: none; font-weight: 600; color: var(--fg); }
+  table.cost tr.unpriced td { color: var(--fg-dim); font-style: italic; }
+  table.cost .model { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--fg); }
+  table.cost .usd { color: var(--accent); font-weight: 500; }
+  table.cost .usd-total { color: var(--accent); font-size: 14px; }
+  .cost-note { color: var(--fg-dim); font-size: 11px; margin-top: 10px; line-height: 1.55; }
+  .cost-note a { color: var(--accent-2); }
+  footer { margin-top: 32px; color: var(--fg-dim); font-size: 12px; text-align: center; }
+  @media (max-width: 960px) {
+    .grid.kpi { grid-template-columns: repeat(3, 1fr); }
+    .grid.cols-2, .grid.cols-3, .token-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="accent">Claude Code</span> 使用统计 <span style="color:var(--fg-dim);font-weight:400" id="window-label"></span></h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section>
+    <div class="grid kpi" id="kpi"></div>
+  </section>
+
+  <section>
+    <h2>时间分布 <span class="sub">每日消息量 / 时段热力</span></h2>
+    <div class="grid cols-2">
+      <div class="panel"><div id="chart-daily-msgs" class="chart h-280"></div></div>
+      <div class="panel"><div id="chart-heatmap"    class="chart h-280"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Token 与费用 <span class="sub">每日 token 流量 (主) · 模型分布 · USD 成本</span></h2>
+    <div class="token-grid">
+      <div class="panel"><div id="chart-daily-tokens" class="chart h-460"></div></div>
+      <div class="panel" id="model-panel">
+        <div style="font-size:13px; font-weight:500; color:var(--fg); margin-bottom:8px;">模型 Token 占比</div>
+        <div class="model-split">
+          <div id="chart-model-pie" class="chart" style="height: 410px;"></div>
+          <div id="model-legend"></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="cost-panel" style="margin-top:16px;"></div>
+  </section>
+
+  <section>
+    <h2>工具与技能 <span class="sub">tool / skill / agent Top 调用</span></h2>
+    <div class="grid cols-3">
+      <div class="panel"><div id="chart-tools"  class="chart h-360"></div></div>
+      <div class="panel"><div id="chart-skills" class="chart h-360"></div></div>
+      <div class="panel"><div id="chart-agents" class="chart h-360"></div></div>
+    </div>
+  </section>
+
+  <footer>
+    数据来源 <code>~/.claude/projects/**/*.jsonl</code> · 时区 UTC+8 · 由 <code>analyze.py</code> 聚合
+  </footer>
+</div>
+
+<script id="cc-data" type="application/json">__DATA_PLACEHOLDER__</script>
+<script>
+const COLORS = {
+  fg: '#e6e8ee', fgDim: '#9aa3b2', border: '#232a39', panel: '#141821',
+  accent: '#c98a4b', accent2: '#6a8caf', good: '#7fc8a9', warn: '#d6a45e',
+};
+const PALETTE = ['#c98a4b','#6a8caf','#7fc8a9','#d6a45e','#9d7bb0','#5fa3a7','#cf6b6b','#7d8aa6'];
+
+function fmtInt(n){ return new Intl.NumberFormat('en-US').format(n); }
+function fmtToken(n){
+  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function fmtTokenAxis(n){
+  // tighter formatter for axis ticks: no decimals when round
+  if (n >= 1e9) return (n/1e9).toFixed(n % 1e9 === 0 ? 0 : 1) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(0) + 'K';
+  return String(n);
+}
+function fmtUsd(n){
+  if (n >= 10000) return n.toLocaleString('en-US', {maximumFractionDigits:0});
+  if (n >= 100)   return n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
+  if (n >= 1)     return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  if (n > 0)      return n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  return '0.00';
+}
+
+function baseGrid(extra={}){
+  return Object.assign({left: 50, right: 20, top: 30, bottom: 40, containLabel: true}, extra);
+}
+function baseTooltip(){ return { trigger: 'axis', backgroundColor: COLORS.panel,
+  borderColor: COLORS.border, textStyle: {color: COLORS.fg} }; }
+function baseAxis(){ return {
+  axisLine: {lineStyle: {color: COLORS.border}},
+  axisLabel: {color: COLORS.fgDim, fontSize: 11},
+  splitLine: {lineStyle: {color: COLORS.border, type: 'dashed'}},
+}; }
+
+// Prefer inline data (works on file://); fall back to fetch (works on http://)
+(function bootstrap(){
+  const inline = document.getElementById('cc-data');
+  const raw = inline && inline.textContent.trim();
+  if (raw && !raw.startsWith('__DATA_PLACEHOLDER')) {
+    try { return render(JSON.parse(raw)); } catch (e) { console.error(e); }
+  }
+  fetch('data.json').then(r => r.json()).then(render).catch(err => {
+    document.body.insertAdjacentHTML('afterbegin',
+      `<div style="background:#5a2222;color:#fff;padding:12px;margin:16px;border-radius:6px">
+       无法加载 data.json：${err}<br/>请用 <code>python3 -m http.server</code> 启动本地服务，或重跑 analyze.py 内联数据。</div>`);
+  });
+})();
+
+function render(d){
+  // ---------- meta ----------
+  document.getElementById('meta').textContent =
+    `${d.window.start} → ${d.window.end} · ${d.window.tz}`;
+
+  // window length in days (inclusive)
+  const windowDays = Math.round(
+    (new Date(d.window.end) - new Date(d.window.start)) / 86400000
+  ) + 1;
+  document.getElementById('window-label').textContent = `· 最近 ${windowDays} 天`;
+  document.title = `Claude Code 使用统计 · 最近 ${windowDays} 天`;
+
+  // ---------- KPI ----------
+  const t = d.totals;
+  const totalTok = t.input + t.output + t.cache_create + t.cache_read;
+  const kpis = [
+    { label: '活跃天数',     value: t.active_days, unit: ` / ${windowDays}`, hint: `${(t.active_days/windowDays*100).toFixed(0)}% 在用` },
+    { label: 'Sessions',     value: fmtInt(t.sessions),     hint: `平均 ${(t.assistant_msgs/t.sessions).toFixed(0)} 条/会话` },
+    { label: 'Assistant 消息', value: fmtInt(t.assistant_msgs), hint: `去重后唯一消息` },
+    { label: 'Token 总量',    value: fmtToken(totalTok), unit: '',
+      hint: `cache_read 占 ${(t.cache_read/totalTok*100).toFixed(0)}%` },
+    { label: '总费用 (USD)',  value: '$' + fmtUsd(t.cost_usd.total), hint: `~ $${(t.cost_usd.total/t.active_days).toFixed(0)} / 活跃日` },
+    { label: '缓存命中率',    value: (t.cache_hit_rate*100).toFixed(1), unit: '%',
+      hint: `节省 ~$${fmtUsd((t.cost_usd.cache_read*9))}` },
+  ];
+  document.getElementById('kpi').innerHTML = kpis.map(k => `
+    <div class="panel">
+      <div class="label">${k.label}</div>
+      <div class="value">${k.value}<span class="unit">${k.unit||''}</span></div>
+      <div class="hint">${k.hint||''}</div>
+    </div>
+  `).join('');
+
+  // ---------- daily messages ----------
+  const dates = d.daily.map(x => x.date);
+  echarts.init(document.getElementById('chart-daily-msgs')).setOption({
+    title: { text: '每日消息量', textStyle: {color: COLORS.fg, fontSize: 13, fontWeight: 500}, left: 0, top: 0 },
+    tooltip: baseTooltip(),
+    legend: { data: ['User', 'Assistant'], textStyle: {color: COLORS.fgDim}, top: 0, right: 0 },
+    grid: baseGrid({top: 40}),
+    xAxis: Object.assign({}, baseAxis(), {type: 'category', data: dates}),
+    yAxis: Object.assign({}, baseAxis(), {type: 'value', axisLabel: {color: COLORS.fgDim, fontSize: 11, formatter: fmtTokenAxis}}),
+    series: [
+      { name: 'User', type: 'bar', stack: 'msg', itemStyle: {color: COLORS.accent2},
+        data: d.daily.map(x => x.user_msgs) },
+      { name: 'Assistant', type: 'bar', stack: 'msg', itemStyle: {color: COLORS.accent},
+        data: d.daily.map(x => x.assistant_msgs) },
+    ],
+  });
+
+  // ---------- heatmap (hour x weekday) ----------
+  const weekdays = ['一','二','三','四','五','六','日'];
+  const hours = Array.from({length:24}, (_,i) => `${i}:00`);
+  const heatData = [];
+  let hMax = 0;
+  for (let w = 0; w < 7; w++) {
+    for (let h = 0; h < 24; h++) {
+      const v = d.heatmap[w][h];
+      if (v > hMax) hMax = v;
+      heatData.push([h, w, v]);
+    }
+  }
+  echarts.init(document.getElementById('chart-heatmap')).setOption({
+    title: { text: '时段热力 (周×小时)', textStyle: {color: COLORS.fg, fontSize: 13, fontWeight: 500}, left: 0, top: 0 },
+    tooltip: { backgroundColor: COLORS.panel, borderColor: COLORS.border, textStyle: {color: COLORS.fg},
+      formatter: p => `周${weekdays[p.value[1]]} · ${p.value[0]}:00<br/>消息数: <b>${p.value[2]}</b>` },
+    grid: { left: 30, right: 20, top: 40, bottom: 50, containLabel: true },
+    xAxis: { type: 'category', data: hours, splitArea: {show: false}, axisLine: {lineStyle:{color:COLORS.border}}, axisLabel: {color: COLORS.fgDim, fontSize: 10, interval: 2} },
+    yAxis: { type: 'category', data: weekdays.map(w => '周'+w), axisLine: {lineStyle:{color:COLORS.border}}, axisLabel: {color: COLORS.fgDim, fontSize: 11} },
+    visualMap: { min: 0, max: hMax, calculable: false, orient: 'horizontal', left: 'center', bottom: 0,
+      inRange: { color: ['#1a1f2c', '#3b3a48', '#7a5b4e', '#c98a4b', '#f0c074'] },
+      textStyle: {color: COLORS.fgDim} },
+    series: [{ name: '消息', type: 'heatmap', data: heatData,
+      label: {show: false}, itemStyle: {borderWidth: 1, borderColor: COLORS.panel} }],
+  });
+
+  // ---------- daily tokens (HERO) ----------
+  echarts.init(document.getElementById('chart-daily-tokens')).setOption({
+    title: { text: '每日 Token 流量', subtext: '堆叠面积 · 线性纵轴 · 单位 K/M/B',
+      textStyle: {color: COLORS.fg, fontSize: 14, fontWeight: 600},
+      subtextStyle: {color: COLORS.fgDim, fontSize: 11}, left: 0, top: 0 },
+    tooltip: Object.assign(baseTooltip(), {
+      valueFormatter: v => fmtToken(v),
+      axisPointer: { type: 'cross', label: {backgroundColor: COLORS.border} },
+    }),
+    legend: { data: ['cache_read','cache_create','input','output'],
+      textStyle: {color: COLORS.fgDim}, top: 4, right: 0 },
+    grid: baseGrid({top: 80, bottom: 56, left: 60}),
+    xAxis: Object.assign({}, baseAxis(), {type: 'category', data: dates, boundaryGap: false,
+                          axisLabel: {color: COLORS.fgDim, fontSize: 11, hideOverlap: true}}),
+    yAxis: Object.assign({}, baseAxis(), {type: 'value',
+                          axisLabel: {color: COLORS.fgDim, fontSize: 11, formatter: fmtTokenAxis}}),
+    series: [
+      // bottom of stack first; pick distinct hues so each layer reads
+      { name: 'cache_read',  type: 'line', stack: 'tok', smooth: true, symbol: 'none',
+        areaStyle: {opacity: 0.85, color: '#3a4a5e'}, lineStyle: {width: 0.8, color: '#5a7088'},
+        itemStyle: {color: '#5a7088'},
+        data: d.daily.map(x => x.tokens.cache_read) },
+      { name: 'cache_create',type: 'line', stack: 'tok', smooth: true, symbol: 'none',
+        areaStyle: {opacity: 0.9, color: '#c98a4b'}, lineStyle: {width: 0.8, color: '#e0a062'},
+        itemStyle: {color: '#c98a4b'},
+        data: d.daily.map(x => x.tokens.cache_create) },
+      { name: 'input',       type: 'line', stack: 'tok', smooth: true, symbol: 'none',
+        areaStyle: {opacity: 1.0, color: '#9d7bb0'}, lineStyle: {width: 0.8, color: '#b394c3'},
+        itemStyle: {color: '#9d7bb0'},
+        data: d.daily.map(x => x.tokens.input) },
+      { name: 'output',      type: 'line', stack: 'tok', smooth: true, symbol: 'none',
+        areaStyle: {opacity: 1.0, color: '#7fc8a9'}, lineStyle: {width: 0.8, color: '#9bd6bd'},
+        itemStyle: {color: '#7fc8a9'},
+        data: d.daily.map(x => x.tokens.output) },
+    ],
+  });
+
+  // ---------- model pie + custom HTML legend ----------
+  function shortModel(m) {
+    return m.replace(/^claude-/, '').replace(/-2026.*$/, '');
+  }
+  const modelData = d.models
+    .filter(m => m.total > 0 && m.model !== '<synthetic>')
+    .map(m => ({ name: shortModel(m.model), value: m.total, _msgs: m.messages, _full: m.model }));
+  const modelTotalTok = modelData.reduce((s, x) => s + x.value, 0);
+  echarts.init(document.getElementById('chart-model-pie')).setOption({
+    tooltip: { backgroundColor: COLORS.panel, borderColor: COLORS.border, textStyle: {color: COLORS.fg},
+      formatter: p => `${p.data._full}<br/>tokens: <b>${fmtToken(p.value)}</b><br/>msgs: ${fmtInt(p.data._msgs)}<br/>占比: ${p.percent}%` },
+    series: [{
+      name: '模型', type: 'pie', radius: ['52%','78%'], center: ['50%', '50%'],
+      avoidLabelOverlap: true, minShowLabelAngle: 6,
+      itemStyle: { borderColor: COLORS.panel, borderWidth: 2 },
+      label: { show: true, position: 'inside', color: COLORS.fg, fontSize: 11, fontWeight: 600,
+               formatter: p => p.percent >= 6 ? `${Math.round(p.percent)}%` : '' },
+      labelLine: { show: false },
+      color: PALETTE,
+      data: modelData,
+    }],
+  });
+  // Custom HTML legend: model name + % (with full pricing-friendly labels)
+  document.getElementById('model-legend').innerHTML = modelData.map((m, i) => {
+    const pct = (m.value / modelTotalTok * 100);
+    const pctStr = pct >= 1 ? pct.toFixed(1) + '%' : '<0.1%';
+    return `<div class="row">
+      <span class="swatch" style="background:${PALETTE[i % PALETTE.length]}"></span>
+      <span class="name" title="${m._full}">${m.name}</span>
+      <span class="pct">${pctStr}</span>
+    </div>`;
+  }).join('');
+
+  // ---------- cost table ----------
+  const costRows = d.models
+    .filter(m => m.total > 0)
+    .sort((a,b) => (b.cost_usd?.total || 0) - (a.cost_usd?.total || 0));
+  const tot = d.totals.cost_usd;
+  const tableRows = costRows.map(m => {
+    const label = shortModel(m.model);
+    if (!m.priced) {
+      return `<tr class="unpriced">
+        <td class="model">${label}</td>
+        <td>${fmtToken(m.total)}</td>
+        <td colspan="5" style="text-align:center">未在价格表中</td>
+      </tr>`;
+    }
+    const c = m.cost_usd;
+    return `<tr>
+      <td class="model">${label}</td>
+      <td>${fmtToken(m.total)}</td>
+      <td>$${fmtUsd(c.input)}</td>
+      <td>$${fmtUsd(c.output)}</td>
+      <td>$${fmtUsd(c.cache_create)}</td>
+      <td>$${fmtUsd(c.cache_read)}</td>
+      <td class="usd">$${fmtUsd(c.total)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('cost-panel').innerHTML = `
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
+      <div style="font-size:13px; font-weight:600; color:var(--fg)">USD 费用明细</div>
+      <div class="usd-total">$${fmtUsd(tot.total)}</div>
+    </div>
+    <table class="cost">
+      <thead>
+        <tr><th>模型</th><th>Tokens</th><th>Input</th><th>Output</th><th>Cache W</th><th>Cache R</th><th>合计</th></tr>
+      </thead>
+      <tbody>
+        ${tableRows}
+        <tr class="total">
+          <td>总计 (已计价)</td><td></td>
+          <td>$${fmtUsd(tot.input)}</td>
+          <td>$${fmtUsd(tot.output)}</td>
+          <td>$${fmtUsd(tot.cache_create)}</td>
+          <td>$${fmtUsd(tot.cache_read)}</td>
+          <td class="usd">$${fmtUsd(tot.total)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="cost-note">
+      价格 (verified ${d.pricing_date}) 取自 <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic</a> ·
+      <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">OpenAI</a> ·
+      <a href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noopener">DeepSeek</a> 官方。
+      <b>Cache W</b> = cache_write 5 分钟档 (Anthropic 1.25× input；OpenAI 不单独计 cache write，按 input 计)；
+      <b>Cache R</b> = cached input (~0.10× input)。
+      DeepSeek V4 Pro 用 list 价 (忽略 5/31 前的 75% 促销)。
+      订阅制 (Claude Pro/Max) 实际不按 token 计费，此处费用为 <b>等价 API 调用成本</b>。
+    </div>`;
+
+  // ---------- tools / skills / agents ----------
+  function topBar(elId, title, items, n, color) {
+    const data = items.slice(0, n);
+    echarts.init(document.getElementById(elId)).setOption({
+      title: { text: title, textStyle: {color: COLORS.fg, fontSize: 13, fontWeight: 500}, left: 0, top: 0 },
+      tooltip: Object.assign(baseTooltip(), { formatter: p => `${p[0].name}<br/><b>${fmtInt(p[0].value)}</b> 次` }),
+      grid: { left: 8, right: 30, top: 30, bottom: 16, containLabel: true },
+      xAxis: Object.assign({}, baseAxis(), {type: 'value', axisLabel: {color: COLORS.fgDim, fontSize: 10, formatter: fmtTokenAxis}}),
+      yAxis: Object.assign({}, baseAxis(), {type: 'category', data: data.map(x => x.name).reverse(), inverse: false, axisLabel: {color: COLORS.fg, fontSize: 11}}),
+      series: [{
+        type: 'bar',
+        data: data.map(x => x.count).reverse(),
+        itemStyle: { color, borderRadius: [0, 3, 3, 0] },
+        label: { show: true, position: 'right', color: COLORS.fgDim, fontSize: 11, formatter: v => fmtInt(v.value) },
+      }],
+    });
+  }
+  topBar('chart-tools',  'Top 工具',  d.tools,  15, COLORS.accent);
+  topBar('chart-skills', 'Top 技能',  d.skills, 12, COLORS.accent2);
+  topBar('chart-agents', 'Top Agent', d.agents, 10, COLORS.good);
+
+  // resize on window change
+  window.addEventListener('resize', () => {
+    document.querySelectorAll('.chart').forEach(el => {
+      const inst = echarts.getInstanceByDom(el);
+      if (inst) inst.resize();
+    });
+  });
+}
+</script>
+</body>
+</html>

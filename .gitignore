@@ -1,0 +1,18 @@
+# Skill output directory (cc-usage-stats default)
+_cc-usage-report/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
