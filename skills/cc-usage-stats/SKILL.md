@@ -30,6 +30,8 @@ local server required).
 - User wants a USD cost estimate based on official Anthropic / OpenAI /
   DeepSeek pricing
 - User wants to know which tools / skills / subagents they're using most
+- User wants to know how much actual time they spent interacting with CC
+  (active interaction time + $/active-hour burn rate)
 
 Do NOT use for: real-time monitoring, billing reconciliation against actual
 invoices (this is an *estimate*), or analyzing other CLI tools.
@@ -43,10 +45,22 @@ invoices (this is an *estimate*), or analyzing other CLI tools.
 
 | Section in dashboard | What it shows |
 |---|---|
-| KPI strip | active days, sessions, msgs, tokens, **总费用 USD**, cache hit rate |
+| KPI strip | active days, **active hours**, sessions, msgs, tokens, **总费用 USD**, **$/active-hour**, cache hit rate |
 | 时间分布 | daily user/assistant bar + weekday × hour heatmap |
+| 时间投入 × 成本 | daily active-interaction hours (bars) × daily cost (line), dual-axis |
 | Token 与费用 | hero stacked-area chart + model donut + USD cost table |
 | 工具与技能 | top tools / skills (subagent_type) / agents bars |
+
+## Active interaction time
+
+`active_seconds` (totals) and per-day `active_hours` estimate real engaged
+time: all timestamped activity events (user/assistant/system/attachment) are
+laid on one merged timeline; a gap counts as "engaged" only if it is
+`<= IDLE_CAP_SECONDS` (default **300s / 5 min** — tune the constant in
+`analyze.py`). One merged timeline means parallel sessions are unioned, not
+double-counted. This is in-seat occupancy (assistant generation + agent runs
+count), not keystroke time. Per-day `cost` is derived in the same pass and
+reconciles exactly with the model-rollup total.
 
 ## Run
 

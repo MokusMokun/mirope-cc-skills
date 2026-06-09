@@ -41,7 +41,7 @@ from pathlib import Path
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 TEMPLATE_PATH = Path(__file__).parent / "index.html.template"
 
-# USD per 1M tokens. Prices last verified 2026-05-13.
+# USD per 1M tokens. Prices last verified 2026-05-25.
 # When refreshing, also bump the date above and the const below — the dashboard
 # surfaces it in the cost-table footnote.
 #
@@ -57,13 +57,15 @@ TEMPLATE_PATH = Path(__file__).parent / "index.html.template"
 #   normal input rate, so cache_create here uses the input price.
 # DeepSeek V4 Pro is in a 75% promo until 2026-05-31; we use list price
 #   ($1.74/$3.48 input/output) so totals don't drop after the promo ends.
-#   Cache hit price = 0.10 * input per DeepSeek's 2026-04-26 adjustment.
-PRICING_DATE = "2026-05-13"
+#   Cache hit list price is $0.0145/MTok (1/10 of the launch cache-hit price,
+#   per DeepSeek's 2026-04-26 adjustment — NOT 1/10 of input).
+PRICING_DATE = "2026-06-04"
 # Keep PRICING table aligned for at-a-glance price comparison; black expanding
 # each dict to 6 lines hurts readability. fmt directives must be on their own line.
 # fmt: off
 PRICING_USD_PER_MTOK = {
     # --- Anthropic ---
+    "claude-opus-4-8":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-7":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-6":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-6-thinking": {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
@@ -72,13 +74,22 @@ PRICING_USD_PER_MTOK = {
     # --- OpenAI (GPT-5.5 short context, <272K) ---
     "gpt-5.5-2026-04-24":       {"input": 5.00, "output": 30.00, "cache_create": 5.00, "cache_read": 0.50},
     "gpt-5.5":                  {"input": 5.00, "output": 30.00, "cache_create": 5.00, "cache_read": 0.50},
-    # --- DeepSeek (V4 Pro list price; ignore active promo so cost stays stable) ---
-    "deepseek-v4-pro":          {"input": 1.74, "output":  3.48, "cache_create": 1.74, "cache_read": 0.174},
+    # --- DeepSeek (V4 permanent list price, effective 2026-05-22) ---
+    # Official USD pricing: https://api-docs.deepseek.com/quick_start/pricing
+    "deepseek-v4-pro":          {"input": 0.435, "output": 0.87, "cache_create": 0.435, "cache_read": 0.003625},
+    "deepseek-v4-flash":        {"input": 0.14,  "output": 0.28, "cache_create": 0.14,  "cache_read": 0.0028},
 }
 # fmt: on
 
 # Window: inclusive both ends, in local time (CST = UTC+8).
 LOCAL_TZ = timezone(timedelta(hours=8))
+
+# Active interaction time: lay all timestamped activity events on one global
+# timeline; a gap <= IDLE_CAP_SECONDS counts as "engaged", larger gaps mean the
+# user stepped away. One merged timeline => parallel sessions are unioned, not
+# double-counted. 5 min is the conventional idle cut-off (WakaTime-style).
+IDLE_CAP_SECONDS = 300
+ACTIVITY_TYPES = ("user", "assistant", "attachment", "system")
 
 
 def parse_ts(s: str) -> datetime | None:
@@ -146,6 +157,8 @@ def main() -> None:
     day_user = Counter()  # user msg / day
     day_assistant_msgs = Counter()  # unique assistant message.id / day
     day_sessions = defaultdict(set)  # date -> set(sessionId)
+    day_cost = defaultdict(float)  # date -> USD (priced models only)
+    event_ts = []  # all in-window activity timestamps, for active-time calc
 
     # Hour x weekday heatmap (weekday 0=Mon)
     heatmap = Counter()  # (weekday, hour) -> assistant_msgs
@@ -180,6 +193,8 @@ def main() -> None:
         sid = r.get("sessionId")
         if sid:
             day_sessions[date_str].add(sid)
+        if rtype in ACTIVITY_TYPES:
+            event_ts.append(ts)
 
         if rtype == "user":
             # Skip synthetic / meta-only entries: we still count them as user activity
@@ -216,6 +231,16 @@ def main() -> None:
             model_tokens[model]["cache_create"] += cc_t
             model_tokens[model]["cache_read"] += cr_t
             model_tokens[model]["messages"] += 1
+            # Per-day USD (priced models only); sums to the model-rollup total
+            # since both iterate the same deduped messages at the same prices.
+            p = PRICING_USD_PER_MTOK.get(model)
+            if p:
+                day_cost[date_str] += (
+                    in_t / 1e6 * p["input"]
+                    + out_t / 1e6 * p["output"]
+                    + cc_t / 1e6 * p["cache_create"]
+                    + cr_t / 1e6 * p["cache_read"]
+                )
 
         # Tool use: every row is counted (each row holds at most one tool_use)
         content = m.get("content")
@@ -235,6 +260,15 @@ def main() -> None:
                     sub = inp.get("subagent_type") or "general-purpose"
                     agents[sub] += 1
 
+    # Active interaction time per day: walk the merged timeline, attribute each
+    # sub-cap gap to the day of its earlier event.
+    event_ts.sort()
+    day_active_sec = defaultdict(float)
+    for i in range(len(event_ts) - 1):
+        gap = (event_ts[i + 1] - event_ts[i]).total_seconds()
+        if 0 < gap <= IDLE_CAP_SECONDS:
+            day_active_sec[event_ts[i].strftime("%Y-%m-%d")] += gap
+
     # Build dense daily series across the window
     days = []
     d = START_DATE
@@ -251,6 +285,8 @@ def main() -> None:
                 "user_msgs": day_user.get(ds, 0),
                 "assistant_msgs": day_assistant_msgs.get(ds, 0),
                 "sessions": len(day_sessions.get(ds, ())),
+                "active_hours": round(day_active_sec.get(ds, 0) / 3600, 3),
+                "cost": round(day_cost.get(ds, 0), 2),
                 "tokens": {
                     "input": toks.get("input", 0),
                     "output": toks.get("output", 0),
@@ -304,6 +340,7 @@ def main() -> None:
         "user_msgs": sum(day_user.values()),
         "sessions": len({s for sset in day_sessions.values() for s in sset}),
         "active_days": sum(1 for ds in days if day_assistant_msgs.get(ds, 0) > 0),
+        "active_seconds": sum(day_active_sec.get(ds, 0) for ds in days),
         "tool_calls": sum(tools.values()),
         "skill_calls": sum(skills.values()),
         "agent_calls": sum(agents.values()),
@@ -336,6 +373,7 @@ def main() -> None:
             "start": START_DATE.strftime("%Y-%m-%d"),
             "end": END_DATE.strftime("%Y-%m-%d"),
             "tz": "Asia/Shanghai (UTC+8)",
+            "idle_cap_min": IDLE_CAP_SECONDS // 60,
         },
         "pricing_date": PRICING_DATE,
         "totals": totals,
@@ -375,6 +413,12 @@ def main() -> None:
     print(f"  window: {START_DATE.date()} → {END_DATE.date()}")
     print(f"  records scanned: {total_records:,}  in window: {in_window_records:,}")
     print(f"  active days: {totals['active_days']}/{len(days)}")
+    print(
+        f"  active time: {totals['active_seconds']/3600:.1f}h "
+        f"({IDLE_CAP_SECONDS//60}min idle cap)  "
+        f"~${cost_total['total']/(totals['active_seconds']/3600):.2f}/active-hour"
+        if totals["active_seconds"] else "  active time: 0h"
+    )
     print(
         f"  assistant msgs: {totals['assistant_msgs']:,}  sessions: {totals['sessions']}"
     )

@@ -32,7 +32,7 @@
   h2 .sub { color: var(--fg-dim); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; font-size: 12px; }
   section { margin-bottom: 28px; }
   .grid { display: grid; gap: 16px; }
-  .grid.kpi { grid-template-columns: repeat(6, 1fr); }
+  .grid.kpi { grid-template-columns: repeat(4, 1fr); }
   .grid.cols-2 { grid-template-columns: 1fr 1fr; }
   .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
@@ -95,6 +95,11 @@
       <div class="panel"><div id="chart-daily-msgs" class="chart h-280"></div></div>
       <div class="panel"><div id="chart-heatmap"    class="chart h-280"></div></div>
     </div>
+  </section>
+
+  <section>
+    <h2>时间投入 × 成本 <span class="sub">每日活跃交互时长 (柱) · 当日成本 (线)</span></h2>
+    <div class="panel"><div id="chart-time-cost" class="chart h-360"></div></div>
   </section>
 
   <section>
@@ -196,13 +201,19 @@ function render(d){
   // ---------- KPI ----------
   const t = d.totals;
   const totalTok = t.input + t.output + t.cache_create + t.cache_read;
+  const activeH = (t.active_seconds || 0) / 3600;
+  const capMin = (d.window.idle_cap_min || 5);
   const kpis = [
     { label: '活跃天数',     value: t.active_days, unit: ` / ${windowDays}`, hint: `${(t.active_days/windowDays*100).toFixed(0)}% 在用` },
+    { label: '活跃交互时长', value: activeH.toFixed(0), unit: ' h',
+      hint: `日均 ${(activeH/Math.max(t.active_days,1)).toFixed(1)} h/活跃日 · ${capMin}min 阈值` },
     { label: 'Sessions',     value: fmtInt(t.sessions),     hint: `平均 ${(t.assistant_msgs/t.sessions).toFixed(0)} 条/会话` },
     { label: 'Assistant 消息', value: fmtInt(t.assistant_msgs), hint: `去重后唯一消息` },
     { label: 'Token 总量',    value: fmtToken(totalTok), unit: '',
       hint: `cache_read 占 ${(t.cache_read/totalTok*100).toFixed(0)}%` },
     { label: '总费用 (USD)',  value: '$' + fmtUsd(t.cost_usd.total), hint: `~ $${(t.cost_usd.total/t.active_days).toFixed(0)} / 活跃日` },
+    { label: '烧钱率',        value: '$' + fmtUsd(activeH > 0 ? t.cost_usd.total/activeH : 0), unit: ' /h',
+      hint: `每活跃小时等价成本` },
     { label: '缓存命中率',    value: (t.cache_hit_rate*100).toFixed(1), unit: '%',
       hint: `节省 ~$${fmtUsd((t.cost_usd.cache_read*9))}` },
   ];
@@ -255,6 +266,44 @@ function render(d){
       textStyle: {color: COLORS.fgDim} },
     series: [{ name: '消息', type: 'heatmap', data: heatData,
       label: {show: false}, itemStyle: {borderWidth: 1, borderColor: COLORS.panel} }],
+  });
+
+  // ---------- time investment × cost ----------
+  echarts.init(document.getElementById('chart-time-cost')).setOption({
+    title: { text: '每日 活跃交互时长 × 成本',
+      subtext: `${capMin} 分钟空闲阈值 · 活跃时长 = 全局时间线占用 (并行会话取并集)`,
+      textStyle: {color: COLORS.fg, fontSize: 14, fontWeight: 600},
+      subtextStyle: {color: COLORS.fgDim, fontSize: 11}, left: 0, top: 0 },
+    tooltip: Object.assign(baseTooltip(), {
+      axisPointer: { type: 'cross', label: {backgroundColor: COLORS.border} },
+      formatter: ps => {
+        const i = ps[0].dataIndex;
+        const x = d.daily[i];
+        return `${x.date}<br/>活跃时长 <b>${(x.active_hours||0).toFixed(1)}</b> h`
+             + `<br/>成本 <b>$${fmtUsd(x.cost||0)}</b>`
+             + ((x.active_hours||0) > 0.05
+                 ? `<br/><span style="color:${COLORS.fgDim}">强度 $${fmtUsd((x.cost||0)/x.active_hours)}/h</span>` : '');
+      },
+    }),
+    legend: { data: ['活跃时长 (h)','成本 ($)'], textStyle: {color: COLORS.fgDim}, top: 4, right: 0 },
+    grid: baseGrid({top: 64, bottom: 40, left: 48, right: 56}),
+    xAxis: Object.assign({}, baseAxis(), {type: 'category', data: dates,
+                          axisLabel: {color: COLORS.fgDim, fontSize: 11, hideOverlap: true}}),
+    yAxis: [
+      Object.assign({}, baseAxis(), {type: 'value', name: 'h', nameTextStyle: {color: COLORS.fgDim},
+        axisLabel: {color: COLORS.fgDim, fontSize: 11}}),
+      Object.assign({}, baseAxis(), {type: 'value', name: '$', nameTextStyle: {color: COLORS.fgDim},
+        splitLine: {show: false},
+        axisLabel: {color: COLORS.fgDim, fontSize: 11, formatter: v => '$' + fmtTokenAxis(v)}}),
+    ],
+    series: [
+      { name: '活跃时长 (h)', type: 'bar', yAxisIndex: 0,
+        itemStyle: {color: COLORS.accent2, borderRadius: [3,3,0,0]},
+        data: d.daily.map(x => x.active_hours || 0) },
+      { name: '成本 ($)', type: 'line', yAxisIndex: 1, smooth: true, symbol: 'circle', symbolSize: 5,
+        itemStyle: {color: COLORS.warn}, lineStyle: {width: 2, color: COLORS.warn},
+        data: d.daily.map(x => x.cost || 0) },
+    ],
   });
 
   // ---------- daily tokens (HERO) ----------
