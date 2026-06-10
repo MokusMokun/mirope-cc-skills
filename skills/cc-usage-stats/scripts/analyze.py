@@ -59,12 +59,13 @@ TEMPLATE_PATH = Path(__file__).parent / "index.html.template"
 #   ($1.74/$3.48 input/output) so totals don't drop after the promo ends.
 #   Cache hit list price is $0.0145/MTok (1/10 of the launch cache-hit price,
 #   per DeepSeek's 2026-04-26 adjustment — NOT 1/10 of input).
-PRICING_DATE = "2026-06-04"
+PRICING_DATE = "2026-06-10"
 # Keep PRICING table aligned for at-a-glance price comparison; black expanding
 # each dict to 6 lines hurts readability. fmt directives must be on their own line.
 # fmt: off
 PRICING_USD_PER_MTOK = {
     # --- Anthropic ---
+    "claude-fable-5":           {"input": 10.00, "output": 50.00, "cache_create": 12.50, "cache_read": 1.00},
     "claude-opus-4-8":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-7":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
     "claude-opus-4-6":          {"input": 5.00, "output": 25.00, "cache_create": 6.25, "cache_read": 0.50},
@@ -347,8 +348,11 @@ def main() -> None:
         "total_records": total_records,
         "records_in_window": in_window_records,
     }
-    cache_in = totals["cache_read"] + totals["input"]
-    totals["cache_hit_rate"] = (totals["cache_read"] / cache_in) if cache_in else 0.0
+    # Hit rate treats cache_create as misses — those tokens weren't served from
+    # cache and were billed full price plus the write premium. Counting them in
+    # the denominator keeps "higher hit rate ⇔ lower cost" true.
+    prompt_in = totals["cache_read"] + totals["cache_create"] + totals["input"]
+    totals["cache_hit_rate"] = (totals["cache_read"] / prompt_in) if prompt_in else 0.0
 
     # Aggregate cost over all priced models
     cost_total = {
